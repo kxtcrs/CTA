@@ -6,6 +6,7 @@ const {
   ButtonStyle,
   ChannelType,
   Client,
+  ActivityType,
   EmbedBuilder,
   Events,
   GatewayIntentBits,
@@ -20,23 +21,43 @@ const {
 } = require('discord.js');
 const {
   closeDatabase,
+  createPendingGoogleAuth,
+  hasGuildWelcomeMessage,
   getGuildSettings,
   initializeDatabase,
+  markGuildWelcomeMessageSent,
   saveGuildSettings
 } = require('./database');
+const {
+  createAuthorizationState,
+  createGoogleAuthorizationUrl,
+  hashAuthorizationState
+} = require('./googleAuth');
+const { startOAuthServer } = require('./oauthServer');
 const { canConfigureSheet } = require('./permissions');
-const { appendSignup, prepareSheet } = require('./sheets');
+const { appendSignup } = require('./sheets');
+const { getEncryptionKey } = require('./tokenEncryption');
 const { cleanSheetTab, cleanText, extractSpreadsheetId, parseWeapons } = require('./validation');
 
 const requiredEnvironment = [
   'DISCORD_TOKEN',
   'DISCORD_CLIENT_ID',
   'DATABASE_URL',
-  'GOOGLE_SERVICE_ACCOUNT_JSON'
+  'GOOGLE_OAUTH_CLIENT_ID',
+  'GOOGLE_OAUTH_CLIENT_SECRET',
+  'GOOGLE_OAUTH_REDIRECT_URI',
+  'GOOGLE_TOKEN_ENCRYPTION_KEY'
 ];
 const missingEnvironment = requiredEnvironment.filter((name) => !process.env[name]);
 if (missingEnvironment.length) {
   console.error(`Missing required environment variables: ${missingEnvironment.join(', ')}`);
+  process.exit(1);
+}
+
+try {
+  getEncryptionKey();
+} catch (error) {
+  console.error(error.message);
   process.exit(1);
 }
 
@@ -54,7 +75,7 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('sheet-setup')
-    .setDescription('Connect a Google Sheet and create the signup tab and headers.')
+    .setDescription('Authorize Google and connect this server to a signup sheet.')
     .addStringOption((option) =>
       option
         .setName('spreadsheet')
@@ -99,6 +120,67 @@ function buildSignupPanel() {
       .setStyle(ButtonStyle.Primary)
   );
   return { embeds: [embed], components: [row] };
+}
+
+function canSendWelcome(channel, guild) {
+  const botMember = guild.members.me;
+  if (!botMember) return false;
+  const permissions = channel.permissionsFor(botMember);
+  return Boolean(
+    permissions &&
+    permissions.has(PermissionFlagsBits.ViewChannel) &&
+    permissions.has(PermissionFlagsBits.SendMessages)
+  );
+}
+
+function findWelcomeChannel(guild) {
+  if (guild.systemChannel && canSendWelcome(guild.systemChannel, guild)) {
+    return guild.systemChannel;
+  }
+  return guild.channels.cache.find((channel) =>
+    (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement) &&
+    canSendWelcome(channel, guild)
+  ) || null;
+}
+
+async function sendGuildWelcome(guild) {
+  const channel = findWelcomeChannel(guild);
+  if (!channel) {
+    console.warn(`Could not post setup instructions in guild ${guild.id}: no writable text channel.`);
+    return false;
+  }
+
+  await channel.send([
+    'Thanks for adding the CTA Albion Sign-up bot!',
+    '',
+    '**Server setup**',
+    '1. An administrator runs `/setup` and chooses the signup channel.',
+    '2. The server owner or a member with a role named **Officer** (case-insensitive) runs `/sheet-setup`, enters the Google Sheet URL and tab, then follows the private Google sign-in link.',
+    '',
+    '**Member signup**',
+    'Members click the **Sign up** button in the configured channel or run `/signup`, then enter their Albion name, preferred role, and at least three weapons.'
+  ].join('\n'));
+  return true;
+}
+
+const welcomeTasks = new Map();
+
+async function sendGuildWelcomeOnce(guild) {
+  if (welcomeTasks.has(guild.id)) return welcomeTasks.get(guild.id);
+
+  const task = (async () => {
+    if (await hasGuildWelcomeMessage(guild.id)) return;
+    if (await sendGuildWelcome(guild)) {
+      await markGuildWelcomeMessageSent(guild.id);
+    }
+  })();
+  welcomeTasks.set(guild.id, task);
+
+  try {
+    await task;
+  } finally {
+    welcomeTasks.delete(guild.id);
+  }
 }
 
 function buildSignupModal() {
@@ -158,12 +240,20 @@ async function handleCommand(interaction) {
       });
       return;
     }
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const spreadsheetId = extractSpreadsheetId(interaction.options.getString('spreadsheet', true));
     const sheetTab = cleanSheetTab(interaction.options.getString('tab', true));
-    await prepareSheet(spreadsheetId, sheetTab);
-    await saveGuildSettings(interaction.guildId, { spreadsheetId, sheetTab });
-    await interaction.editReply(`Google Sheet connected. The "${sheetTab}" tab is ready with signup headers.`);
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const state = createAuthorizationState();
+    await createPendingGoogleAuth({
+      stateHash: hashAuthorizationState(state),
+      guildId: interaction.guildId,
+      spreadsheetId,
+      sheetTab
+    });
+    const authorizationUrl = createGoogleAuthorizationUrl(state);
+    await interaction.editReply(
+      `Finish connecting this server's Google Sheet by signing in here (link expires in 10 minutes):\n${authorizationUrl}`
+    );
     return;
   }
 
@@ -215,7 +305,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await handleModalSubmit(interaction);
     }
   } catch (error) {
-    console.error('Interaction failed:', error);
+    console.error('Interaction failed:', error.message);
     let message = 'That action failed. Please check the bot setup or contact a server admin.';
     if (interaction.isChatInputCommand() &&
         (interaction.commandName === 'setup' || interaction.commandName === 'sheet-setup')) {
@@ -238,17 +328,38 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 client.once(Events.ClientReady, (readyClient) => {
+  readyClient.user.setPresence({
+    status: 'online',
+    activities: [{ name: 'CTA signups | /signup', type: ActivityType.Playing }]
+  });
   console.log(`CTA signup bot is online as ${readyClient.user.tag}.`);
+  for (const guild of readyClient.guilds.cache.values()) {
+    sendGuildWelcomeOnce(guild).catch((error) => {
+      console.error(`Could not post setup instructions in guild ${guild.id}:`, error.message);
+    });
+  }
 });
+
+client.on(Events.GuildCreate, (guild) => {
+  sendGuildWelcomeOnce(guild).catch((error) => {
+    console.error(`Could not post setup instructions in guild ${guild.id}:`, error.message);
+  });
+});
+
+let oauthServer;
 
 async function start() {
   await initializeDatabase();
   await registerCommands();
+  oauthServer = await startOAuthServer();
   await client.login(process.env.DISCORD_TOKEN);
 }
 
 async function shutdown(signal) {
   console.log(`Received ${signal}; shutting down.`);
+  if (oauthServer) {
+    await new Promise((resolve) => oauthServer.close(resolve));
+  }
   client.destroy();
   await closeDatabase();
   process.exit(0);
@@ -259,6 +370,9 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 start().catch(async (error) => {
   console.error('Bot startup failed:', error);
+  if (oauthServer) {
+    await new Promise((resolve) => oauthServer.close(resolve));
+  }
   client.destroy();
   await closeDatabase().catch((closeError) => console.error('Database shutdown failed:', closeError));
   process.exit(1);

@@ -1,23 +1,13 @@
 const { google } = require('googleapis');
+const { getGoogleOAuthClientForGuild } = require('./googleAuth');
 const { SHEET_HEADERS } = require('./validation');
 
-function createSheetsClient() {
-  let credentials;
-  try {
-    credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-  } catch {
-    throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON must contain valid service-account JSON.');
-  }
-
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets']
-  });
+function createSheetsClient(auth) {
   return google.sheets({ version: 'v4', auth });
 }
 
-async function prepareSheet(spreadsheetId, sheetTab) {
-  const sheets = createSheetsClient();
+async function prepareSheet(auth, spreadsheetId, sheetTab) {
+  const sheets = createSheetsClient(auth);
   const spreadsheet = await sheets.spreadsheets.get({
     spreadsheetId,
     fields: 'sheets.properties.title'
@@ -56,7 +46,8 @@ async function prepareSheet(spreadsheetId, sheetTab) {
 }
 
 async function appendSignup(settings, row) {
-  const sheets = createSheetsClient();
+  const auth = await getGoogleOAuthClientForGuild(settings.guild_id);
+  const sheets = createSheetsClient(auth);
   await sheets.spreadsheets.values.append({
     spreadsheetId: settings.spreadsheet_id,
     range: `${quoteSheetTab(settings.sheet_tab)}!A:F`,
