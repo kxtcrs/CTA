@@ -24,6 +24,7 @@ const {
   initializeDatabase,
   saveGuildSettings
 } = require('./database');
+const { canConfigureSheet } = require('./permissions');
 const { appendSignup, prepareSheet } = require('./sheets');
 const { cleanSheetTab, cleanText, extractSpreadsheetId, parseWeapons } = require('./validation');
 
@@ -54,7 +55,6 @@ const commands = [
   new SlashCommandBuilder()
     .setName('sheet-setup')
     .setDescription('Connect a Google Sheet and create the signup tab and headers.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption((option) =>
       option
         .setName('spreadsheet')
@@ -151,6 +151,13 @@ async function handleCommand(interaction) {
   }
 
   if (interaction.commandName === 'sheet-setup') {
+    if (!canConfigureSheet(interaction)) {
+      await interaction.reply({
+        content: 'Only a member with the Officer role or the server owner can configure the Google Sheet.',
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const spreadsheetId = extractSpreadsheetId(interaction.options.getString('spreadsheet', true));
     const sheetTab = cleanSheetTab(interaction.options.getString('tab', true));

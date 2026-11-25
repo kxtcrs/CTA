@@ -22,7 +22,7 @@ A Discord bot for CTA roster signups. Members submit their Albion in-game name, 
 4. In the Discord Developer Portal, enable the **Guild Install** installation context and add the `bot` and `applications.commands` scopes. Grant the bot permission to view channels, send messages, and embed links. Invite it to your server.
 5. Deploy. Check Railway's deployment logs; a successful start reports that the bot is online.
 6. In your CTA server, an administrator runs `/setup` and selects the signup channel.
-7. An administrator runs `/sheet-setup`, pastes the Google Sheet URL, and enters a tab name (for example `Signups`).
+7. A member with a role named `Officer` (case-insensitive), or the server owner, runs `/sheet-setup`, pastes the Google Sheet URL, and enters a tab name (for example `Signups`).
 8. Members use the panel's **Sign up** button or run `/signup`.
 
 This is a background Discord bot, not a web server; it does not need a public domain or exposed port.
@@ -31,13 +31,13 @@ If Railway still logs `python: command not found`, check the service's **Setting
 
 ## Google Sheets setup
 
-Create a Google Cloud service account, enable the Google Sheets API for its project, and create a JSON key. Add the entire key JSON to Railway as `GOOGLE_SERVICE_ACCOUNT_JSON`. Share the target spreadsheet with the service account's `client_email` as an editor. The `/sheet-setup` command checks access and creates the requested tab and its header row. Use a new or empty tab; existing data is not overwritten.
+Create a Google Cloud service account, enable the Google Sheets API for its project, and create a JSON key. Add the entire key JSON to Railway as `GOOGLE_SERVICE_ACCOUNT_JSON`. Share the target spreadsheet with the service account's `client_email` as an editor. A server Officer or the server owner can then enter the sheet URL and tab with `/sheet-setup`; the command checks access and creates the requested tab and its header row. Use a new or empty tab; existing data is not overwritten.
 
 The sheet records the UTC signup time, Discord user ID and name, Albion in-game name, preferred role, and weapon list. New signups are appended as new rows.
 
 ## Local development
 
-Use Node.js 22 or newer. Copy `.env.example` to `.env`, fill in the same values, and run:
+Use Node.js 22 or newer. Copy `.env.example` to `.env`, fill in `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DATABASE_URL`, and `GOOGLE_SERVICE_ACCOUNT_JSON`, and run:
 
 ```sh
 npm install
