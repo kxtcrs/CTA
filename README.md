@@ -11,6 +11,7 @@ A Discord bot for CTA roster signups. Members submit their Albion in-game name, 
 ## Railway deployment
 
 1. Push this project to a GitHub repository and create a Railway project from that repository.
+   Railway will use the included `Dockerfile` to build with Node.js 22. Python is not used by this bot.
 2. Add a **PostgreSQL** service to the Railway project. Railway provides `DATABASE_URL` to services connected to that database.
 3. In the bot service's Variables, add:
    - `DISCORD_TOKEN`: bot token.
@@ -25,6 +26,8 @@ A Discord bot for CTA roster signups. Members submit their Albion in-game name, 
 8. Members use the panel's **Sign up** button or run `/signup`.
 
 This is a background Discord bot, not a web server; it does not need a public domain or exposed port.
+
+If Railway still logs `python: command not found`, check the service's **Settings → Source** and make sure its root directory is the folder containing this `Dockerfile` and `package.json`. Remove any custom build or deploy command that invokes `python`, then redeploy.
 
 ## Google Sheets setup
 
