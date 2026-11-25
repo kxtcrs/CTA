@@ -1,0 +1,20 @@
+{
+  "name": "cta-albion-signup-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Discord CTA signup bot with Google Sheets sync, ready for Railway.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.4.7",
+    "googleapis": "^150.0.1",
+    "pg": "^8.13.3"
+  }
+}
